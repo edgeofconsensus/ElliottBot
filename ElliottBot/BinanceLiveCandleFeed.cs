@@ -13,6 +13,16 @@ public sealed class BinanceLiveCandleFeed : ICandleFeed
     private readonly BinanceDataSource _ds;
     private readonly string _symbol;
     private readonly KlineInterval _interval;
+    private static TimeSpan IntervalToSpan(KlineInterval i) => i switch
+    {
+        KlineInterval.OneMinute => TimeSpan.FromMinutes(1),
+        KlineInterval.FiveMinutes => TimeSpan.FromMinutes(5),
+        KlineInterval.FifteenMinutes => TimeSpan.FromMinutes(15),
+        KlineInterval.OneHour => TimeSpan.FromHours(1),
+        KlineInterval.FourHour => TimeSpan.FromHours(4),
+        KlineInterval.OneDay => TimeSpan.FromDays(1),
+        _ => TimeSpan.FromMinutes(1)
+    };
 
     public string Name => $"Binance LIVE {_symbol} {_interval}";
 
@@ -25,26 +35,37 @@ public sealed class BinanceLiveCandleFeed : ICandleFeed
 
     public async Task<IReadOnlyList<Candle>> GetWarmupAsync(int warmupCount, CancellationToken ct)
     {
-        // беремо трохи більше і обрізаємо
-        var end = DateTime.UtcNow;
-        var start = end.AddDays(-60); // для 1h це ок; можна зробити розумніше
+        // Binance зазвичай дає до 1000 limit, але нам достатньо
+        var limit = Math.Min(500, Math.Max(warmupCount + 5, 200));
+        var all = await _ds.GetRecentCandlesAsync(_symbol, _interval, limit, ct);
+        // прибрати останню "поточну" (якщо вона ще формується)
+        var span = IntervalToSpan(_interval);
+        var now = DateTime.UtcNow;
 
-        var all = await _ds.GetHistoricalCandlesAsync(_symbol, _interval, start, end);
+        if (all.Count > 0 && all[^1].Time + span > now.AddSeconds(-2))
+            all.RemoveAt(all.Count - 1);
+
         return all.TakeLast(warmupCount).ToList();
     }
 
     public async IAsyncEnumerable<Candle> StreamAsync([EnumeratorCancellation] CancellationToken ct)
     {
-        DateTime? lastEmittedOpenTime = null;
-
+        // прайм
+        DateTime? lastEmittedTime = null;
+        try
+        {
+            var prime = await _ds.GetRecentCandlesAsync(_symbol, _interval, 3, ct);
+            if (prime.Count >= 2)
+                lastEmittedTime = prime[^2].Time;
+        }
+        catch { /* ігноруємо */ }
         while (!ct.IsCancellationRequested)
         {
+            Candle? toYield = null;
+
             try
             {
-                var end = DateTime.UtcNow;
-                var start = end.AddDays(-2);
-
-                var candles = await _ds.GetHistoricalCandlesAsync(_symbol, _interval, start, end);
+                var candles = await _ds.GetRecentCandlesAsync(_symbol, _interval, 3, ct);
 
                 Console.WriteLine($"[POLL] got={candles.Count} utc={DateTime.UtcNow:HH:mm:ss}");
 
@@ -52,11 +73,11 @@ public sealed class BinanceLiveCandleFeed : ICandleFeed
                 {
                     var closed = candles[^2];
 
-                    if (lastEmittedOpenTime is null || closed.Time > lastEmittedOpenTime.Value)
+                    if (lastEmittedTime is null || closed.Time > lastEmittedTime.Value)
                     {
-                        lastEmittedOpenTime = closed.Time;
+                        lastEmittedTime = closed.Time;
                         Console.WriteLine($"[YIELD] closed={closed.Time:yyyy-MM-dd HH:mm}");
-                        yield return closed;
+                        toYield = closed;
                     }
                     else
                     {
@@ -69,7 +90,23 @@ public sealed class BinanceLiveCandleFeed : ICandleFeed
                 Console.WriteLine($"[FEED ERROR] {ex.Message}");
             }
 
-            await Task.Delay(TimeSpan.FromSeconds(30), ct);
+            if (toYield is not null)
+                yield return toYield.Value;
+
+
+            var span = IntervalToSpan(_interval);
+
+            var delay = TimeSpan.FromSeconds(5); // дефолт на випадок, якщо ще нічого не емітили
+            if (lastEmittedTime is not null)
+            {
+                var target = lastEmittedTime.Value + span + span + TimeSpan.FromSeconds(2);
+                delay = target - DateTime.UtcNow;
+
+                if (delay < TimeSpan.FromSeconds(2))
+                    delay = TimeSpan.FromSeconds(2);
+            }
+
+            await Task.Delay(delay, ct);
         }
     }
 

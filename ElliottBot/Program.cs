@@ -7,6 +7,7 @@ namespace ElliottBot;
 
 class Program
 {
+
     static async Task Main()
     {
         Console.WriteLine("ElliottBot started");
@@ -25,7 +26,7 @@ class Program
 
         // 1) BACKTEST feed (ти його зробиш як окремий клас, або тимчасово прямо тут)
         // 2) LIVE paper feed:
-        var liveFeed = new BinanceLiveCandleFeed(ds, "BTCUSDT", KlineInterval.OneHour);
+        var liveFeed = new BinanceLiveCandleFeed(ds, "BTCUSDT", KlineInterval.OneMinute);
 
         using var cts = new CancellationTokenSource();
         Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };

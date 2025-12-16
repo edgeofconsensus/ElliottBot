@@ -4,6 +4,8 @@ using System.Linq;
 using System.Threading.Tasks;
 using Binance.Net.Clients;
 using Binance.Net.Enums;
+using System.Threading;
+
 using CryptoExchange.Net.Authentication; // якщо будуть ключі, поки можна не використовувати
 
 namespace ElliottBot;
@@ -25,13 +27,36 @@ public class BinanceDataSource : IMarketDataSource
     public BinanceDataSource()
     {
         _client = new BinanceRestClient();
-        // Якщо потрібні ключі – можна буде додати:
-        // _client = new BinanceClient(new BinanceClientOptions
-        // {
-        //     ApiCredentials = new ApiCredentials("KEY", "SECRET")
-        // });
     }
+    public async Task<List<Candle>> GetRecentCandlesAsync(
+    string symbol,
+    KlineInterval interval,
+    int limit,
+    CancellationToken ct = default)
+    {
+        var result = await _client.SpotApi.ExchangeData.GetKlinesAsync(
+            symbol,
+            interval,
+            limit: limit,
+            ct: ct
+        );
 
+        if (!result.Success)
+            throw new Exception($"Binance klines error: {result.Error}");
+
+        // на всякий: сортуємо
+        return result.Data
+            .OrderBy(k => k.OpenTime)
+            .Select(k => new Candle(
+                Time: k.OpenTime,
+                Open: k.OpenPrice,
+                High: k.HighPrice,
+                Low: k.LowPrice,
+                Close: k.ClosePrice,
+                Volume: k.Volume
+            ))
+            .ToList();
+    }
     public async Task<List<Candle>> GetHistoricalCandlesAsync(
         string symbol,
         KlineInterval interval,
