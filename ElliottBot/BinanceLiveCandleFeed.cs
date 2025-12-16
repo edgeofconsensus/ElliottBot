@@ -43,12 +43,13 @@ public sealed class BinanceLiveCandleFeed : ICandleFeed
             {
                 var end = DateTime.UtcNow;
                 var start = end.AddDays(-2);
+
                 var candles = await _ds.GetHistoricalCandlesAsync(_symbol, _interval, start, end);
+
                 Console.WriteLine($"[POLL] got={candles.Count} utc={DateTime.UtcNow:HH:mm:ss}");
 
                 if (candles.Count >= 2)
                 {
-                    // ОСТАННЯ може бути ще незакрита, тому беремо передостанню як "closed"
                     var closed = candles[^2];
 
                     if (lastEmittedOpenTime is null || closed.Time > lastEmittedOpenTime.Value)
@@ -68,8 +69,8 @@ public sealed class BinanceLiveCandleFeed : ICandleFeed
                 Console.WriteLine($"[FEED ERROR] {ex.Message}");
             }
 
-            // для 1h достатньо раз на хвилину/30с, щоб не спамити API
             await Task.Delay(TimeSpan.FromSeconds(30), ct);
         }
     }
+
 }
