@@ -33,6 +33,15 @@ class Program
 
         await runner.RunAsync(liveFeed, cts.Token);
 
+        var stats = bot.GetStats();
+        Console.WriteLine("=== STATS ===");
+        Console.WriteLine($"Balance: {stats.Balance}");
+        Console.WriteLine($"Max DD: {stats.MaxDrawdown:P2}");
+        Console.WriteLine($"Closed trades: {stats.ClosedTrades} (wins: {stats.WinTrades})");
+        Console.WriteLine($"Pending created: {stats.PendingCreated}");
+        Console.WriteLine($"Pending filled: {stats.PendingFilled}");
+        Console.WriteLine($"Pending canceled: {stats.PendingCanceled}");
+
         Console.WriteLine("Stopped.");
     }
 }

@@ -107,6 +107,25 @@ namespace ElliottBot
     decimal Pnl
 );
 
+    public readonly record struct PendingSignal(
+        Side Side,
+        decimal EntryPrice,
+        decimal StopLoss,
+        decimal TakeProfit,
+        string Comment,
+        DateTime SignalTime
+    );
+
+    public readonly record struct BotStats(
+        decimal Balance,
+        decimal MaxDrawdown,
+        int ClosedTrades,
+        int WinTrades,
+        int PendingCreated,
+        int PendingFilled,
+        int PendingCanceled
+    );
+
     public readonly record struct DetectedSetup(
     Side Side,
     ImpulseCandidate Impulse,
