@@ -15,6 +15,11 @@ namespace ElliottBot
         private readonly RiskManager _risk;
 
         private Position? _openPosition;
+        private PendingSignal? _pendingSignal;
+
+        private int _pendingCreated;
+        private int _pendingFilled;
+        private int _pendingCanceled;
 
         private int _closedTrades;
         private int _winTrades;
@@ -24,6 +29,9 @@ namespace ElliottBot
         public decimal Balance => _risk.Balance;
         public int ClosedTrades => _closedTrades;
         public int WinTrades => _winTrades;
+        public int PendingCreated => _pendingCreated;
+        public int PendingFilled => _pendingFilled;
+        public int PendingCanceled => _pendingCanceled;
 
         private readonly List<Trade> _trades = new();
         public IReadOnlyList<Trade> Trades => _trades;
@@ -39,6 +47,16 @@ namespace ElliottBot
         public int SetupsSeen => _setupsSeen;
         public int AbcInZone => _abcInZone;
         public int AbcBlocked => _abcBlocked;
+
+        public BotStats GetStats() => new(
+            Balance,
+            _maxDrawdown,
+            _closedTrades,
+            _winTrades,
+            _pendingCreated,
+            _pendingFilled,
+            _pendingCanceled
+        );
 
         public ElliottBot(BotConfig cfg)
         {
@@ -71,6 +89,12 @@ namespace ElliottBot
             if (_openPosition is not null)
                 CheckPosition(current);
 
+            if (_openPosition is null && _pendingSignal is not null)
+            {
+                if (TryEnterPending(current))
+                    return;
+            }
+
             if (_lastExitTime is not null)
             {
                 // 3 години паузи після закриття
@@ -80,7 +104,7 @@ namespace ElliottBot
 
 
             // 2) якщо позиції нема — шукаємо сигнал ТІЛЬКИ на history
-            if (_openPosition is not null)
+            if (_openPosition is not null || _pendingSignal is not null)
                 return;
 
             var entry = current.Open;
@@ -238,25 +262,101 @@ namespace ElliottBot
                     return;
                 Console.WriteLine($"Risk/unit: {riskPerUnit} | Risk$: {_risk.Balance * _cfg.RiskPerTrade:F2}");
 
-
-                _openPosition = new Position(
+                _pendingSignal = new PendingSignal(
                     setup.Value.Side,
-                    size,
                     entry,
                     sl,
                     tp,
+                    setup.Value.Comment,
                     current.Time
                 );
+                _pendingCreated++;
 
                 Console.WriteLine("=== NEW SIGNAL ===");
                 Console.WriteLine($"Time: {current.Time:yyyy-MM-dd HH:mm}");
                 Console.WriteLine($"Side: {setup.Value.Side}");
-                Console.WriteLine($"Entry: {entry}");
+                Console.WriteLine($"Entry (planned): {entry}");
                 Console.WriteLine($"SL: {sl}");
                 Console.WriteLine($"TP: {tp}");
-                Console.WriteLine($"Size: {size}");
-                Console.WriteLine($"Comment: {setup.Value.Comment}\n");
+                Console.WriteLine("Entry at NEXT candle open (paper broker)\n");
             }
+        }
+
+        private bool TryEnterPending(Candle current)
+        {
+            if (_pendingSignal is null)
+                return false;
+
+            var pending = _pendingSignal.Value;
+            var entry = current.Open;
+
+            if (!ValidateLevels(pending.Side, entry, pending.StopLoss, pending.TakeProfit))
+            {
+                Console.WriteLine($"[PAPER] Cancel pending (bad levels) signalTime={pending.SignalTime:yyyy-MM-dd HH:mm} entry={entry}");
+                _pendingCanceled++;
+                _pendingSignal = null;
+                return false;
+            }
+
+            var riskPerUnit = Math.Abs(entry - pending.StopLoss);
+            var minRisk = entry * 0.0015m;   // 0.15%
+            var maxRisk = entry * 0.015m;    // 1.5%
+
+            if (riskPerUnit < minRisk || riskPerUnit > maxRisk)
+            {
+                Console.WriteLine($"[PAPER] Cancel pending (risk filter) signalTime={pending.SignalTime:yyyy-MM-dd HH:mm} entry={entry}");
+                _pendingCanceled++;
+                _pendingSignal = null;
+                return false;
+            }
+
+            var size = _risk.CalcPositionSize(new ElliottSignal(pending.Side, entry, pending.StopLoss, pending.TakeProfit, pending.Comment), entry);
+
+            if (size <= 0)
+            {
+                Console.WriteLine($"[PAPER] Cancel pending (size=0) signalTime={pending.SignalTime:yyyy-MM-dd HH:mm}");
+                _pendingCanceled++;
+                _pendingSignal = null;
+                return false;
+            }
+
+            _openPosition = new Position(
+                pending.Side,
+                size,
+                entry,
+                pending.StopLoss,
+                pending.TakeProfit,
+                current.Time
+            );
+
+            _pendingSignal = null;
+            _pendingFilled++;
+
+            Console.WriteLine("=== ENTER POSITION ===");
+            Console.WriteLine($"Signal time: {pending.SignalTime:yyyy-MM-dd HH:mm}");
+            Console.WriteLine($"Entry time: {current.Time:yyyy-MM-dd HH:mm}");
+            Console.WriteLine($"Side: {pending.Side}");
+            Console.WriteLine($"Entry: {entry}");
+            Console.WriteLine($"SL: {pending.StopLoss}");
+            Console.WriteLine($"TP: {pending.TakeProfit}");
+            Console.WriteLine($"Size: {size}");
+            Console.WriteLine($"Comment: {pending.Comment}\n");
+
+            // одразу враховуємо high/low цієї ж свічки для SL/TP
+            CheckPosition(current);
+
+            return true;
+        }
+
+        private static bool ValidateLevels(Side side, decimal entry, decimal sl, decimal tp)
+        {
+            if (side == Side.Long)
+                return sl < entry && tp > entry;
+
+            if (side == Side.Short)
+                return sl > entry && tp < entry;
+
+            return false;
         }
         private void CheckPosition(Candle last)
         {
