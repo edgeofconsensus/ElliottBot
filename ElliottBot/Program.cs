@@ -1,4 +1,4 @@
-﻿using Binance.Net.Enums;
+using Binance.Net.Enums;
 using System;
 using System.Threading;
 using System.Threading.Tasks;
@@ -19,12 +19,31 @@ class Program
             Symbol = "BTCUSDT"
         };
 
+
         var bot = new ElliottBot(cfg);
         var runner = new BotRunner(bot, warmupCount: 200);
 
         var ds = new BinanceDataSource();
 
-        // 1) BACKTEST feed (ти його зробиш як окремий клас, або тимчасово прямо тут)
+
+        var end = DateTime.UtcNow;
+        var start = end.AddDays(-90); // або як раніше
+        var candles = await ds.GetHistoricalCandlesAsync("BTCUSDT", KlineInterval.OneHour, start, end);
+
+        // warmup: наприклад 200
+        int warmup = 200;
+        for (int i = warmup; i < candles.Count; i++)
+        {
+            var history = candles.Take(i).ToList();   // або краще без ToList: зробити slice
+            var current = candles[i];
+
+            bot.OnNewCandle(history, current);
+
+            // опційно: раз на N кроків друк статистики
+        }
+
+        Console.WriteLine($"DONE bal={bot.Balance} trades={bot.ClosedTrades} win={bot.WinTrades}");
+
         // 2) LIVE paper feed:
         var liveFeed = new BinanceLiveCandleFeed(ds, "BTCUSDT", KlineInterval.OneMinute);
 
@@ -32,15 +51,6 @@ class Program
         Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
 
         await runner.RunAsync(liveFeed, cts.Token);
-
-        var stats = bot.GetStats();
-        Console.WriteLine("=== STATS ===");
-        Console.WriteLine($"Balance: {stats.Balance}");
-        Console.WriteLine($"Max DD: {stats.MaxDrawdown:P2}");
-        Console.WriteLine($"Closed trades: {stats.ClosedTrades} (wins: {stats.WinTrades})");
-        Console.WriteLine($"Pending created: {stats.PendingCreated}");
-        Console.WriteLine($"Pending filled: {stats.PendingFilled}");
-        Console.WriteLine($"Pending canceled: {stats.PendingCanceled}");
 
         Console.WriteLine("Stopped.");
     }
